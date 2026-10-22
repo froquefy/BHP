@@ -175,7 +175,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); }
 .num { font-weight: 700; color: var(--text); }
 .chip { background: var(--surface-2); padding: 2px 10px; border-radius: 99px; }
 .st { display: inline-flex; align-items: center; gap: 5px; }
-.st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.st::before { content: ""; flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .st-known::before { background: var(--ok); }
 .st-learn::before { background: var(--warn); }
 .st-new::before { background: var(--border); border: 1px solid var(--muted); }
@@ -262,12 +262,12 @@ mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inhe
 /* Stats */
 .stats-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
-.tile .v { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
-.tile .k { font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-.tile .k::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
-.tile.t-k .k::before { background: var(--ok); }
-.tile.t-l .k::before { background: var(--warn); }
-.tile.t-n .k::before { border: 1px solid var(--muted); }
+.tile .v { font-size: 1.6rem; font-weight: 700; line-height: 1.1; display: flex; align-items: center; gap: 8px; }
+.tile .v::before { content: ""; flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
+.tile .k { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+.tile.t-k .v::before { background: var(--ok); }
+.tile.t-l .v::before { background: var(--warn); }
+.tile.t-n .v::before { border: 1.5px solid var(--muted); }
 .secs { display: grid; gap: 8px; margin-top: 12px; }
 .sec { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; }
 .sec .name { font-weight: 600; }
@@ -281,8 +281,10 @@ mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inhe
 .sync { padding: 14px 16px 16px; margin-top: 14px; }
 .sync h3 { margin: 0 0 4px; font-size: 1rem; }
 .sync p { margin: 0 0 12px; color: var(--muted); font-size: .88rem; }
-.sync label { display: flex; flex-direction: column; gap: 6px; font-size: .82rem; color: var(--muted); margin-top: 14px; }
+.sync .lbl { display: block; font-size: .82rem; color: var(--muted); margin: 14px 0 6px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.sync .row .btn { flex: 1 1 auto; }
+.sync .row input + .btn { flex: 0 0 auto; }
 .row input { flex: 1 1 180px; min-width: 0; }
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(40, 15, 28, .38); }
 .modal[hidden] { display: none; }
@@ -400,7 +402,7 @@ mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inhe
   <!-- ŚCIĄGA -->
   <section id="view-list" hidden>
     <div class="tools">
-      <input type="search" id="lSearch" placeholder="Szukaj (np. „urlop”, „33 miesiące”, „pożar”)…" aria-label="Szukaj">
+      <input type="search" id="lSearch" placeholder="Szukaj, np. urlop, pożar…" aria-label="Szukaj">
       <select id="lSec" aria-label="Dział"></select>
       <label class="check"><input type="checkbox" id="lAll"> Pokaż też błędne warianty</label>
     </div>
@@ -419,9 +421,8 @@ mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inhe
         <button class="btn primary small" id="shareBtn">Wyślij link z postępem</button>
         <button class="btn small" id="copyCodeBtn">Kopiuj kod</button>
       </div>
-      <label>Wklej kod albo link z innego urządzenia
-        <span class="row"><input type="text" id="importInput" placeholder="np. AQAAAAAA…" autocomplete="off" spellcheck="false"><button class="btn small" id="importBtn">Wczytaj</button></span>
-      </label>
+      <label class="lbl" for="importInput">Wklej kod albo link z innego urządzenia</label>
+      <div class="row"><input type="text" id="importInput" placeholder="np. AQAAAAAA…" autocomplete="off" spellcheck="false"><button class="btn small" id="importBtn">Wczytaj</button></div>
     </div>
     <div class="secs" id="stSecs"></div>
     <div class="danger"><button class="linkbtn" id="resetBtn">Wyzeruj wszystkie postępy</button></div>
@@ -769,7 +770,7 @@ function renderStats() {
   $('#stTiles').innerHTML =
     `<div class="tile t-k"><div class="v">${cnt.known}</div><div class="k">opanowane</div></div>` +
     `<div class="tile t-l"><div class="v">${cnt.learn}</div><div class="k">do powtórki</div></div>` +
-    `<div class="tile t-n"><div class="v">${cnt.new}</div><div class="k">jeszcze nowe</div></div>`;
+    `<div class="tile t-n"><div class="v">${cnt.new}</div><div class="k">nowe</div></div>`;
   $('#stSecs').innerHTML = SECTIONS.map((name, i) => {
     const qs = Q.filter(x => x.s === i);
     const k = qs.filter(x => status(x.n) === 'known').length, l = qs.filter(x => status(x.n) === 'learn').length;
