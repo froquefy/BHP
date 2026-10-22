@@ -754,7 +754,8 @@ const THEME_INFO = {
   dark: ['ciemny', ico('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>')],
   pink: ['różowy', ico('<path fill="currentColor" d="M12 20.5s-7.3-4.5-9.2-9C1.6 8.4 3.6 5 7 5c2 0 3.6 1.1 5 2.9C13.4 6.1 15 5 17 5c3.4 0 5.4 3.4 4.2 6.5-1.9 4.5-9.2 9-9.2 9z"/>')]
 };
-let theme = store.get('theme', 'pink');
+// nowy klucz, żeby wybór z wersji bez różowego motywu nie nadpisywał domyślnego różowego
+let theme = store.get('motyw', 'pink');
 const effTheme = () => theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 const applyTheme = () => {
   if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
@@ -766,7 +767,7 @@ const applyTheme = () => {
 };
 $('#themeBtn').addEventListener('click', () => {
   theme = THEMES[(THEMES.indexOf(effTheme()) + 1) % THEMES.length];
-  store.set('theme', theme); applyTheme();
+  store.set('motyw', theme); applyTheme();
 });
 
 /* ---------- Start ---------- */
