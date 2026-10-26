@@ -492,7 +492,7 @@ const store = {
 let prog = store.get('prog', {});          // n -> { k: opanowane?, c: ile razy dobrze, w: ile razy źle }
 const DEF = { sec: '', from: 1, to: MAXN, pool: 'todo', order: 'seq', mode: 'quiz', shuf: false };
 let cfg = Object.assign({}, DEF, store.get('cfg', {}));
-let sess = store.get('sess', null);        // { queue, total, ok, bad, first, seen, wrong }
+let sess = store.get('sess', null);        // { queue, total, first, seen, wrong }
 let cur = null;                            // bieżąca karta
 
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -559,7 +559,7 @@ function updateSummary() {
 
 /* ---------- Sesja ---------- */
 function startSession(ns) {
-  sess = { queue: ns, total: ns.length, ok: 0, bad: 0, first: 0, seen: [], wrong: [] };
+  sess = { queue: ns, total: ns.length, first: 0, seen: [], wrong: [] };
   save(); updateSummary(); showCard();
 }
 
@@ -569,7 +569,8 @@ function renderSessBar() {
   const left = new Set(sess.queue).size, done = sess.total - left;
   el.innerHTML = `<span>Sesja: <b>${done}</b> / ${sess.total}</span>` +
     `<div class="bar"><i class="s" style="width:${done / sess.total * 100}%"></i></div>` +
-    `<span class="okc" title="Dobrze">✓ ${sess.ok}</span><span class="badc" title="Źle">✕ ${sess.bad}</span>`;
+    // każde pytanie liczone raz: ✓ dobrze za pierwszym razem, ✕ była przy nim pomyłka
+    `<span class="okc" title="Pytania dobrze za pierwszym razem">✓ ${sess.first}</span><span class="badc" title="Pytania z pomyłką">✕ ${sess.wrong.length}</span>`;
 }
 
 function showCard() {
@@ -653,10 +654,10 @@ function grade(known) {
   if (first) sess.seen.push(n);
   sess.queue.shift();
   if (known) {
-    p.c++; p.k = true; sess.ok++;
+    p.c++; p.k = true;
     if (first) sess.first++;
   } else {
-    p.w++; p.k = false; sess.bad++;
+    p.w++; p.k = false;
     if (!sess.wrong.includes(n)) sess.wrong.push(n);
     // wraca za kilka kart
     const pos = Math.min(sess.queue.length, 3 + Math.floor(Math.random() * 3));
