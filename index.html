@@ -453,7 +453,7 @@ mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inhe
     <div class="stats-head" id="stTiles"></div>
     <div class="panel sync">
       <h3>Postęp na innym urządzeniu</h3>
-      <p>Postęp zapisuje się tylko w tej przeglądarce. Żeby uczyć się dalej na innym urządzeniu, wyślij sobie link z postępem (np. na Messengerze) i otwórz go tam. Możesz też skopiować sam kod.</p>
+      <p>Postęp zapisuje się tylko w tej przeglądarce. Żeby uczyć się dalej na innym urządzeniu, wyślij sobie link (np. na Messengerze) i otwórz go tam. Link przenosi postęp i bieżącą sesję razem z licznikiem ✓ / ✕. Możesz też skopiować sam kod.</p>
       <div class="row">
         <button class="btn primary small" id="shareBtn">Wyślij link z postępem</button>
         <button class="btn small" id="copyCodeBtn">Kopiuj kod</button>
@@ -503,7 +503,8 @@ let cur = null;                            // bieżąca karta
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const status = n => { const p = prog[n]; return !p ? 'new' : p.k ? 'known' : 'learn'; };
 const STATUS_LABEL = { new: 'nowe', learn: 'do powtórki', known: 'opanowane' };
-const save = () => { store.set('prog', prog); store.set('sess', sess); store.set('cfg', cfg); };
+let saveCode = null, saveGen = 0;           // gotowy kod do przeniesienia postępu (unieważniany przy każdym zapisie)
+const save = () => { store.set('prog', prog); store.set('sess', sess); store.set('cfg', cfg); saveCode = null; saveGen++; };
 const plural = (n, one, few, many) => n === 1 ? one : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? few : many;
 
 // tekst do wyszukiwania: bez HTML i bez polskich znaków
@@ -568,12 +569,17 @@ function startSession(ns) {
   save(); updateSummary(); showCard();
 }
 
+// każde pytanie liczone raz, wg ostatniej odpowiedzi
+function sessCounts(s) {
+  const results = Object.values(s.res || {});
+  const ok = results.filter(Boolean).length;
+  return { done: s.total - new Set(s.queue).size, ok, bad: results.length - ok };
+}
+
 function renderSessBar() {
   const el = $('#sessbar');
   if (!sess || !sess.total) { el.innerHTML = ''; return; }
-  const left = new Set(sess.queue).size, done = sess.total - left;
-  const results = Object.values(sess.res || {});
-  const okN = results.filter(Boolean).length, badN = results.length - okN;
+  const { done, ok: okN, bad: badN } = sessCounts(sess);
   el.innerHTML = `<span>Sesja: <b>${done}</b> / ${sess.total}</span>` +
     `<div class="bar"><i class="s" style="width:${done / sess.total * 100}%"></i></div>` +
     // każde pytanie liczone raz, wg ostatniej odpowiedzi: poprawione przechodzi z ✕ do ✓
@@ -826,6 +832,7 @@ function renderStats() {
       `<button class="btn small" data-sec="${i}">${k === qs.length ? 'Powtórz' : 'Ucz się'}</button>` +
       `<div class="bar"><i class="k" style="width:${k / qs.length * 100}%"></i><i class="l" style="width:${l / qs.length * 100}%"></i></div></div>`;
   }).join('');
+  refreshSaveCode();
 }
 $('#stSecs').addEventListener('click', e => {
   const b = e.target.closest('[data-sec]');
@@ -853,44 +860,116 @@ $('#resetBtn').addEventListener('click', () => {
   startSession(buildPool(cfg));
 });
 
-/* ---------- Przenoszenie postępu (kod / link) ---------- */
-// 2 bity na pytanie: 0 nowe, 1 do powtórki, 2 opanowane, 3 opanowane, ale z pomyłką w historii
-const SAVE_VER = 1;
-const SAVE_LEN = 2 + Math.ceil(Q.length / 4);
+/* ---------- Przenoszenie postępu i sesji (kod / link) ---------- */
+// Kod v2: ustawienia sesji + 1 bajt na pytanie (stan postępu * 5 + stan w sesji), skompresowany deflate.
+// Postęp: 0 nowe, 1 do powtórki, 2 opanowane, 3 opanowane, ale z pomyłką w historii.
+// Sesja:  0 poza sesją, 1 jeszcze nie było, 2 dobrze za pierwszym razem, 3 poprawione po pomyłce, 4 pomyłka do poprawienia.
+// Starsze kody v1 (sam postęp, 2 bity na pytanie) dalej da się wczytać.
+const POOLS = ['todo', 'all', 'wrong', 'new'];
+const HEAD = 9;
+const PAYLOAD_LEN = HEAD + Q.length + 1;
+const V1_LEN = 2 + Math.ceil(Q.length / 4);
+const canZip = typeof CompressionStream === 'function' && typeof DecompressionStream === 'function';
 const b64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64url = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
 const checksum = bytes => { let s = 0; for (let i = 0; i < bytes.length - 1; i++) s = (s + bytes[i] * (i + 1)) % 251; return s; };
+const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-function encodeProgress(p = prog) {
-  const bytes = new Uint8Array(SAVE_LEN);
-  bytes[0] = SAVE_VER;
-  Q.forEach((x, i) => {
-    const e = p[x.n];
-    const v = !e ? 0 : !e.k ? 1 : e.w > 0 ? 3 : 2;
-    bytes[1 + (i >> 2)] |= v << ((i & 3) * 2);
-  });
-  bytes[SAVE_LEN - 1] = checksum(bytes);
-  return b64url(bytes);
+async function pipeBytes(bytes, stream) {
+  const w = stream.writable.getWriter();
+  w.write(bytes).catch(() => {}); w.close().catch(() => {});
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
 }
 
-function decodeProgress(text) {
-  const m = String(text).trim().match(/([A-Za-z0-9_-]{20,})\s*$/);  // sam kod albo cały link
-  if (!m) return null;
-  let bytes;
-  try { bytes = unb64url(m[1]); } catch (e) { return null; }
-  if (bytes.length !== SAVE_LEN || bytes[0] !== SAVE_VER || bytes[SAVE_LEN - 1] !== checksum(bytes)) return null;
-  const out = {};
+const progState = e => !e ? 0 : !e.k ? 1 : e.w > 0 ? 3 : 2;
+const progFromState = v => v === 1 ? { k: false, c: 0, w: 1 } : v === 2 ? { k: true, c: 1, w: 0 } : v === 3 ? { k: true, c: 1, w: 1 } : null;
+
+function buildPayload(p, s, c) {
+  const out = new Uint8Array(PAYLOAD_LEN);
+  const queue = new Set(s ? s.queue : []), seen = new Set(s ? s.seen : []), wrong = new Set(s ? s.wrong : []);
+  const head = s && s.queue.length ? s.queue[0] : 0;
+  out[0] = c.sec === '' ? 255 : +c.sec;
+  out[1] = c.from >> 8; out[2] = c.from & 255;
+  out[3] = c.to >> 8; out[4] = c.to & 255;
+  out[5] = Math.max(0, POOLS.indexOf(c.pool));
+  out[6] = (c.order === 'rand' ? 1 : 0) | (c.mode === 'flip' ? 2 : 0) | (c.shuf ? 4 : 0) | (s ? 8 : 0);
+  out[7] = head >> 8; out[8] = head & 255;
   Q.forEach((x, i) => {
-    const v = (bytes[1 + (i >> 2)] >> ((i & 3) * 2)) & 3;
-    if (v === 1) out[x.n] = { k: false, c: 0, w: 1 };
-    else if (v === 2) out[x.n] = { k: true, c: 1, w: 0 };
-    else if (v === 3) out[x.n] = { k: true, c: 1, w: 1 };
+    let st = 0;
+    if (seen.has(x.n)) st = !wrong.has(x.n) ? 2 : queue.has(x.n) ? 4 : 3;
+    else if (queue.has(x.n)) st = 1;
+    out[HEAD + i] = progState(p[x.n]) * 5 + st;
   });
+  out[PAYLOAD_LEN - 1] = checksum(out);
   return out;
 }
 
+function parsePayload(b) {
+  if (b.length !== PAYLOAD_LEN || b[PAYLOAD_LEN - 1] !== checksum(b)) return null;
+  const c = {
+    sec: b[0] === 255 ? '' : String(b[0]), from: b[1] << 8 | b[2], to: b[3] << 8 | b[4],
+    pool: POOLS[b[5]] || 'todo', order: b[6] & 1 ? 'rand' : 'seq', mode: b[6] & 2 ? 'flip' : 'quiz', shuf: !!(b[6] & 4)
+  };
+  if (c.sec !== '' && !SECTIONS[+c.sec]) c.sec = '';
+  if (!(c.from >= 1 && c.to <= MAXN && c.from <= c.to)) { c.from = 1; c.to = MAXN; }
+  const p = {}, unseen = [], again = [];
+  const s = b[6] & 8 ? { queue: [], total: 0, first: 0, seen: [], wrong: [], res: {} } : null;
+  for (let i = 0; i < Q.length; i++) {
+    const n = Q[i].n, v = b[HEAD + i], ps = Math.floor(v / 5), st = v % 5;
+    if (ps > 3) return null;
+    const e = progFromState(ps);
+    if (e) p[n] = e;
+    if (!s || !st) continue;
+    s.total++;
+    if (st === 1) { unseen.push(n); continue; }
+    s.seen.push(n);
+    s.res[n] = st !== 4;
+    if (st === 2) s.first++; else s.wrong.push(n);
+    if (st === 4) again.push(n);
+  }
+  if (s) {
+    s.queue = c.order === 'rand' ? shuffle(unseen) : unseen;
+    // pomyłki do poprawienia wracają co kilka kart, jak w zwykłej sesji
+    again.forEach((n, i) => s.queue.splice(Math.min(s.queue.length, 1 + i * 3), 0, n));
+    const head = b[7] << 8 | b[8], hi = s.queue.indexOf(head);
+    if (hi > 0) { s.queue.splice(hi, 1); s.queue.unshift(head); }
+  }
+  return { prog: p, sess: s, cfg: c };
+}
+
+function parseV1(b) {
+  if (b.length !== V1_LEN || b[V1_LEN - 1] !== checksum(b)) return null;
+  const p = {};
+  Q.forEach((x, i) => { const e = progFromState((b[1 + (i >> 2)] >> ((i & 3) * 2)) & 3); if (e) p[x.n] = e; });
+  return { prog: p, sess: null, cfg: null };
+}
+
+async function encodeSave(p = prog, s = sess, c = cfg) {
+  const payload = buildPayload(p, s, c);
+  if (canZip) return b64url(Uint8Array.of(2, ...await pipeBytes(payload, new CompressionStream('deflate-raw'))));
+  return b64url(Uint8Array.of(3, ...payload));
+}
+
+async function decodeSave(text) {
+  const m = String(text).trim().match(/([A-Za-z0-9_-]{8,})\s*$/);  // sam kod albo cały link
+  if (!m) return null;
+  try {
+    const b = unb64url(m[1]);
+    if (b[0] === 1) return parseV1(b);
+    if (b[0] === 3) return parsePayload(b.slice(1));
+    if (b[0] === 2 && canZip) return parsePayload(await pipeBytes(b.slice(1), new DecompressionStream('deflate-raw')));
+  } catch (e) {}
+  return null;
+}
+
+// kod liczony z wyprzedzeniem, żeby kopiowanie i udostępnianie działały od razu po kliknięciu (Safari)
+function refreshSaveCode() {
+  const g = saveGen;
+  encodeSave().then(c => { if (g === saveGen) saveCode = c; });
+}
+const currentSaveCode = async () => saveCode || encodeSave();
+
 const tally = p => { let k = 0, l = 0; for (const n in p) { if (p[n].k) k++; else l++; } return { k, l }; };
-const progressLink = () => location.href.split('#')[0] + '#postep=' + encodeProgress();
 
 let toastT;
 function toast(msg) {
@@ -924,51 +1003,63 @@ async function copyText(text, msg) {
   }
 }
 
+function sessLine(s) {
+  if (!s || !s.total) return '';
+  const c = sessCounts(s);
+  return `sesja <b>${c.done}</b> / ${s.total} · ✓ <b>${c.ok}</b> ✕ <b>${c.bad}</b>`;
+}
+
 function offerImport(data) {
-  if (encodeProgress(data) === encodeProgress()) { toast('Ten postęp jest już na tym urządzeniu'); return; }
-  const a = tally(data), b = tally(prog);
+  const same = data.cfg
+    ? sameBytes(buildPayload(data.prog, data.sess, data.cfg), buildPayload(prog, sess, cfg))
+    : sameBytes(buildPayload(data.prog, null, cfg), buildPayload(prog, null, cfg));
+  if (same) { toast('Ten postęp jest już na tym urządzeniu'); return; }
+  const a = tally(data.prog), b = tally(prog);
+  const inCode = sessLine(data.sess), here = sessLine(sess);
   openModal(`<h3>Wczytać postęp?</h3>` +
-    `<p>W kodzie: opanowane <b>${a.k}</b>, do powtórki <b>${a.l}</b>.</p>` +
-    `<p>Teraz na tym urządzeniu: opanowane <b>${b.k}</b>, do powtórki <b>${b.l}</b>.</p>` +
-    `<p>Wczytanie zastąpi postęp na tym urządzeniu.</p>`,
-    [{ label: 'Anuluj' }, { label: 'Wczytaj postęp', cls: 'primary', fn: () => applyImport(data) }]);
+    `<p>W kodzie: opanowane <b>${a.k}</b>, do powtórki <b>${a.l}</b>${inCode ? `<br>${inCode}` : ''}</p>` +
+    `<p>Teraz na tym urządzeniu: opanowane <b>${b.k}</b>, do powtórki <b>${b.l}</b>${here ? `<br>${here}` : ''}</p>` +
+    `<p>Wczytanie zastąpi postęp${data.sess ? ' i bieżącą sesję' : ''} na tym urządzeniu.</p>`,
+    [{ label: 'Anuluj' }, { label: 'Wczytaj', cls: 'primary', fn: () => applyImport(data) }]);
 }
 
 function applyImport(data) {
   const next = {};
-  for (const n in data) {
-    const old = prog[n], d = data[n];
+  for (const n in data.prog) {
+    const old = prog[n], d = data.prog[n];
     // przy tym samym stanie zostawiamy lokalne liczniki
     next[n] = old && !!old.k === d.k && (old.w > 0) === (d.w > 0) ? old : d;
   }
-  prog = next; sess = null; save();
+  prog = next;
+  if (data.cfg) { cfg = data.cfg; fillForm(); }
+  if (data.sess) { sess = data.sess; save(); updateSummary(); showCard(); }
+  else { sess = null; save(); startSession(buildPool(cfg)); }
   renderOverall();
   if (view === 'stats') renderStats();
-  startSession(buildPool(cfg));
-  toast('Wczytano postęp ✓');
+  toast(data.sess ? 'Wczytano postęp i sesję ✓' : 'Wczytano postęp ✓');
 }
 
-function checkLinkImport() {
+async function checkLinkImport() {
   const m = location.hash.match(/postep=([A-Za-z0-9_-]+)/);
   if (!m) return;
   history.replaceState(null, '', location.href.split('#')[0]);
-  const data = decodeProgress(m[1]);
+  const data = await decodeSave(m[1]);
   if (!data) { toast('Link z postępem jest uszkodzony'); return; }
   offerImport(data);
 }
 window.addEventListener('hashchange', checkLinkImport);
 
 $('#shareBtn').addEventListener('click', async () => {
-  const url = progressLink();
+  const url = location.href.split('#')[0] + '#postep=' + await currentSaveCode();
   if (navigator.share && matchMedia('(pointer: coarse)').matches) {
     try { await navigator.share({ title: 'Postęp — fiszki BHP', url }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
   }
   copyText(url, 'Skopiowano link — otwórz go na drugim urządzeniu');
 });
-$('#copyCodeBtn').addEventListener('click', () => copyText(encodeProgress(), 'Skopiowano kod'));
-$('#importBtn').addEventListener('click', () => {
-  const data = decodeProgress($('#importInput').value);
+$('#copyCodeBtn').addEventListener('click', async () => copyText(await currentSaveCode(), 'Skopiowano kod'));
+$('#importBtn').addEventListener('click', async () => {
+  const data = await decodeSave($('#importInput').value);
   if (!data) { toast('To nie wygląda na poprawny kod'); return; }
   $('#importInput').value = '';
   offerImport(data);
