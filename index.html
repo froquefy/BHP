@@ -492,7 +492,12 @@ const store = {
 let prog = store.get('prog', {});          // n -> { k: opanowane?, c: ile razy dobrze, w: ile razy źle }
 const DEF = { sec: '', from: 1, to: MAXN, pool: 'todo', order: 'seq', mode: 'quiz', shuf: false };
 let cfg = Object.assign({}, DEF, store.get('cfg', {}));
-let sess = store.get('sess', null);        // { queue, total, first, seen, wrong }
+let sess = store.get('sess', null);        // { queue, total, first, seen, wrong, res }
+// starsze zapisane sesje nie mają „res” (ostatni wynik pytania) — odtwarzamy go
+if (sess && !sess.res) {
+  sess.res = {};
+  (sess.seen || []).forEach(n => { sess.res[n] = !((sess.wrong || []).includes(n) && sess.queue.includes(n)); });
+}
 let cur = null;                            // bieżąca karta
 
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -559,7 +564,7 @@ function updateSummary() {
 
 /* ---------- Sesja ---------- */
 function startSession(ns) {
-  sess = { queue: ns, total: ns.length, first: 0, seen: [], wrong: [] };
+  sess = { queue: ns, total: ns.length, first: 0, seen: [], wrong: [], res: {} };
   save(); updateSummary(); showCard();
 }
 
@@ -567,10 +572,12 @@ function renderSessBar() {
   const el = $('#sessbar');
   if (!sess || !sess.total) { el.innerHTML = ''; return; }
   const left = new Set(sess.queue).size, done = sess.total - left;
+  const results = Object.values(sess.res || {});
+  const okN = results.filter(Boolean).length, badN = results.length - okN;
   el.innerHTML = `<span>Sesja: <b>${done}</b> / ${sess.total}</span>` +
     `<div class="bar"><i class="s" style="width:${done / sess.total * 100}%"></i></div>` +
-    // każde pytanie liczone raz: ✓ dobrze za pierwszym razem, ✕ była przy nim pomyłka
-    `<span class="okc" title="Pytania dobrze za pierwszym razem">✓ ${sess.first}</span><span class="badc" title="Pytania z pomyłką">✕ ${sess.wrong.length}</span>`;
+    // każde pytanie liczone raz, wg ostatniej odpowiedzi: poprawione przechodzi z ✕ do ✓
+    `<span class="okc" title="Pytania odpowiedziane dobrze">✓ ${okN}</span><span class="badc" title="Pytania jeszcze do poprawienia">✕ ${badN}</span>`;
 }
 
 function showCard() {
@@ -652,6 +659,7 @@ function grade(known) {
   const p = prog[n] || (prog[n] = { k: false, c: 0, w: 0 });
   const first = !sess.seen.includes(n);
   if (first) sess.seen.push(n);
+  sess.res[n] = known;
   sess.queue.shift();
   if (known) {
     p.c++; p.k = true;
